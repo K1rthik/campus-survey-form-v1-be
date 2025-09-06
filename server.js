@@ -21,5 +21,5 @@ app.use('/api/campus-form', CampusFormRoutes);
 
 
 app.listen(port, () => {
-  console.log(`Server is running on port 172.30.6.12:${port}`);
+  console.log(`Server is running on port 172.30.6.7:${port}`);
 });
