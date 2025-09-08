@@ -70,6 +70,7 @@ router.post(
         employeeType,
         employeeId,
         eventName,
+        eventDate,
         visitorType,
         idNumber,
         feedback,
@@ -107,6 +108,9 @@ router.post(
       if (!eventName || !visitorType) {
         return res.status(400).json({ error: 'eventName and visitorType are required.' });
       }
+       if (!eventDate) {
+        return res.status(400).json({ error: 'eventDate is required.' });
+      }
       if (!selfieBuffer) {
         return res.status(400).json({ error: 'selfie image is required.' });
       }
@@ -119,9 +123,9 @@ router.post(
         `INSERT INTO form_submissions (
           first_name, last_name, email, contact, gender,
           employee_status, employee_type, employee_id,
-          event_name, visitor_type, id_number, feedback,
+          event_name, event_date, visitor_type, id_number, feedback,
           selfie, signature, form_type
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
         RETURNING *;`,
         [
           firstName || null,
@@ -133,6 +137,7 @@ router.post(
           employeeType || null,
           employeeId || null,
           eventName || null,
+          eventDate || null,
           visitorType || null,
           idNumber || null,
           feedback || null,
