@@ -26,19 +26,19 @@ router.post('/add-info', upload.single('selfieImage'), async (req, res) => {
  
   try {
     await client.query('BEGIN');
-   
+ 
     const {
       // Domain landing form data
-      firstName, lastName, gender, email, contact, employeeId, employeeType,
-      // Campus form data  
-      eventName, name, mobileNumber, userType, staffId, feedback, signature
+      firstName, lastName, gender, email, contact, employeeId, employeeType, employeeStatus,
+      // Campus form data
+      eventName, name, mobileNumber, userType, staffId, feedback, signature, visitDate
     } = req.body;
-   
-    // Validate required fields
-    if (!contact || !eventName || !name || !mobileNumber || !userType || !feedback || !signature) {
+ 
+    // Validate required fields (added visitDate)
+    if (!contact || !eventName || !name || !mobileNumber || !userType || !feedback || !signature || !visitDate) {
       return res.status(400).json({
         error: 'Required fields missing',
-        required: ['contact', 'eventName', 'name', 'mobileNumber', 'userType', 'feedback', 'signature']
+        required: ['contact', 'eventName', 'name', 'mobileNumber', 'userType', 'feedback', 'signature', 'visitDate']
       });
     }
  
@@ -52,16 +52,41 @@ router.post('/add-info', upload.single('selfieImage'), async (req, res) => {
       return res.status(400).json({ error: 'Selfie image is required' });
     }
  
+    // Parse and validate date format (dd/mm/yyyy)
+    const dateRegex = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+    const dateMatch = visitDate.match(dateRegex);
+   
+    if (!dateMatch) {
+      return res.status(400).json({ error: 'visitDate must be in dd/mm/yyyy format' });
+    }
+ 
+    const [, day, month, year] = dateMatch;
+    const parsedDate = new Date(year, month - 1, day); // month is 0-indexed in Date constructor
+   
+    // Validate if the date is valid
+    if (parsedDate.getDate() != day || parsedDate.getMonth() != month - 1 || parsedDate.getFullYear() != year) {
+      return res.status(400).json({ error: 'Invalid date provided' });
+    }
+ 
+    // Optional: enforce server-side 7-day range guard
+    const today = new Date();
+    const max = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const min = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
+   
+    if (parsedDate < min || parsedDate > max) {
+      return res.status(400).json({ error: 'visitDate must be within the past 7 days including today' });
+    }
+ 
     // Convert base64 signature to buffer
     const signatureBase64 = signature.replace(/^data:image\/[a-z]+;base64,/, '');
     const signatureBuffer = Buffer.from(signatureBase64, 'base64');
  
-    // Insert ALL data into database
+    // Insert ALL data into database (store visitDate as dd/mm/yyyy string)
     const insertQuery = `
       INSERT INTO campus_feedback
-      (first_name, last_name, gender, email, contact, employee_id, employee_type,
-       event_name, name, mobile_number, user_type, staff_id, selfie_image, feedback, signature)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      (first_name, last_name, gender, email, contact, employee_id, employee_type, employee_status,
+       event_name, name, mobile_number, user_type, staff_id, selfie_image, feedback, signature, visit_date)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING id, created_at
     `;
  
@@ -73,6 +98,7 @@ router.post('/add-info', upload.single('selfieImage'), async (req, res) => {
       contact,                  // Domain data
       employeeId || null,       // Domain data
       employeeType || null,     // Domain data
+      employeeStatus || null,   // Domain data
       eventName,                // Campus form data
       name,                     // Campus form data
       mobileNumber,             // Campus form data
@@ -80,7 +106,8 @@ router.post('/add-info', upload.single('selfieImage'), async (req, res) => {
       userType === 'Staff' ? staffId : null, // Campus form data
       req.file.buffer,          // Selfie image buffer
       feedback,                 // Campus form data
-      signatureBuffer           // Signature buffer
+      signatureBuffer,          // Signature buffer
+      visitDate                 // Store as dd/mm/yyyy string
     ]);
  
     await client.query('COMMIT');
