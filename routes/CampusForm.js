@@ -1,55 +1,85 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
 const pool = require('../db');
-// PostgreSQL connection pool
- 
-// Configure multer for file uploads
-const storage = multer.memoryStorage();
-const upload = multer({
-  storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'));
-    }
-  }
-});
- 
-// POST endpoint for campus feedback - stores ALL form data
-router.post('/add-info', upload.single('selfieImage'), async (req, res) => {
+const { encryptServer, decryptServer } = require('./encryptionUtils');
+
+// Add JSON body parser middleware with 50MB limit
+router.use(express.json({ limit: '50mb' }));
+
+// POST endpoint for campus feedback
+router.post('/add-info', async (req, res) => {
   const client = await pool.connect();
  
   try {
     await client.query('BEGIN');
- 
+   
+    // Decrypt the envelope
+    const { envelope } = req.body;
+    
+    if (!envelope) {
+      const errorResponse = JSON.stringify({
+        error: 'Missing encrypted envelope',
+        required: ['envelope']
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+
+    // Decrypt and parse the payload
+    let decryptedData;
+    try {
+      const decryptedString = decryptServer(envelope);
+      decryptedData = JSON.parse(decryptedString);
+    } catch (decryptError) {
+      console.error('Decryption error:', decryptError);
+      const errorResponse = JSON.stringify({
+        error: 'Failed to decrypt request data',
+        message: decryptError.message
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+
     const {
       // Domain landing form data
       firstName, lastName, gender, email, contact, employeeId, employeeType, employeeStatus,
       // Campus form data
-      eventName, name, mobileNumber, userType, staffId, feedback, signature, visitDate
-    } = req.body;
+      eventName, name, mobileNumber, userType, staffId, feedback, visitDate,
+      // Base64 encoded data
+      signature, selfieImage
+    } = decryptedData;
  
-    // Validate required fields (added visitDate)
+    // Validate required fields
     if (!contact || !eventName || !name || !mobileNumber || !userType || !feedback || !signature || !visitDate) {
-      return res.status(400).json({
+      const errorResponse = JSON.stringify({
         error: 'Required fields missing',
         required: ['contact', 'eventName', 'name', 'mobileNumber', 'userType', 'feedback', 'signature', 'visitDate']
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
       });
     }
  
     // Validate staff ID if user type is Staff
     if (userType === 'Staff' && !staffId) {
-      return res.status(400).json({ error: 'Staff ID is required for staff members' });
+      const errorResponse = JSON.stringify({
+        error: 'Staff ID is required for staff members'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
     }
  
     // Validate selfie image
-    if (!req.file) {
-      return res.status(400).json({ error: 'Selfie image is required' });
+    if (!selfieImage) {
+      const errorResponse = JSON.stringify({
+        error: 'Selfie image is required'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
     }
  
     // Parse and validate date format (dd/mm/yyyy)
@@ -57,31 +87,50 @@ router.post('/add-info', upload.single('selfieImage'), async (req, res) => {
     const dateMatch = visitDate.match(dateRegex);
    
     if (!dateMatch) {
-      return res.status(400).json({ error: 'visitDate must be in dd/mm/yyyy format' });
+      const errorResponse = JSON.stringify({
+        error: 'visitDate must be in dd/mm/yyyy format'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
     }
  
     const [, day, month, year] = dateMatch;
-    const parsedDate = new Date(year, month - 1, day); // month is 0-indexed in Date constructor
+    const parsedDate = new Date(year, month - 1, day);
    
     // Validate if the date is valid
     if (parsedDate.getDate() != day || parsedDate.getMonth() != month - 1 || parsedDate.getFullYear() != year) {
-      return res.status(400).json({ error: 'Invalid date provided' });
+      const errorResponse = JSON.stringify({
+        error: 'Invalid date provided'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
     }
  
-    // Optional: enforce server-side 7-day range guard
+    // Enforce server-side 7-day range guard
     const today = new Date();
     const max = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const min = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
    
     if (parsedDate < min || parsedDate > max) {
-      return res.status(400).json({ error: 'visitDate must be within the past 7 days including today' });
+      const errorResponse = JSON.stringify({
+        error: 'visitDate must be within the past 7 days including today'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
     }
  
     // Convert base64 signature to buffer
     const signatureBase64 = signature.replace(/^data:image\/[a-z]+;base64,/, '');
     const signatureBuffer = Buffer.from(signatureBase64, 'base64');
+
+    // Convert base64 selfie image to buffer
+    const selfieBase64 = selfieImage.replace(/^data:image\/[a-z]+;base64,/, '');
+    const selfieBuffer = Buffer.from(selfieBase64, 'base64');
  
-    // Insert ALL data into database (store visitDate as dd/mm/yyyy string)
+    // Insert ALL data into database
     const insertQuery = `
       INSERT INTO campus_feedback
       (first_name, last_name, gender, email, contact, employee_id, employee_type, employee_status,
@@ -91,39 +140,50 @@ router.post('/add-info', upload.single('selfieImage'), async (req, res) => {
     `;
  
     const result = await client.query(insertQuery, [
-      firstName || null,        // Domain data
-      lastName || null,         // Domain data
-      gender || null,           // Domain data
-      email || null,            // Domain data
-      contact,                  // Domain data
-      employeeId || null,       // Domain data
-      employeeType || null,     // Domain data
-      employeeStatus || null,   // Domain data
-      eventName,                // Campus form data
-      name,                     // Campus form data
-      mobileNumber,             // Campus form data
-      userType,                 // Campus form data
-      userType === 'Staff' ? staffId : null, // Campus form data
-      req.file.buffer,          // Selfie image buffer
-      feedback,                 // Campus form data
-      signatureBuffer,          // Signature buffer
-      visitDate                 // Store as dd/mm/yyyy string
+      firstName || null,
+      lastName || null,
+      gender || null,
+      email || null,
+      contact,
+      employeeId || null,
+      employeeType || null,
+      employeeStatus || null,
+      eventName,
+      name,
+      mobileNumber,
+      userType,
+      userType === 'Staff' ? staffId : null,
+      selfieBuffer,
+      feedback,
+      signatureBuffer,
+      visitDate
     ]);
  
     await client.query('COMMIT');
- 
-    res.status(201).json({
+
+    // Encrypt success response
+    const successResponse = JSON.stringify({
       message: 'Complete feedback data saved successfully!',
       id: result.rows[0].id,
       timestamp: result.rows[0].created_at
     });
  
+    res.status(201).json({
+      envelope: encryptServer(successResponse)
+    });
+ 
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error saving complete feedback data:', error);
-    res.status(500).json({
+    
+    // Encrypt error response
+    const errorResponse = JSON.stringify({
       error: 'Internal server error',
       message: error.message
+    });
+    
+    res.status(500).json({
+      envelope: encryptServer(errorResponse)
     });
   } finally {
     client.release();
@@ -131,5 +191,3 @@ router.post('/add-info', upload.single('selfieImage'), async (req, res) => {
 });
  
 module.exports = router;
- 
- 
