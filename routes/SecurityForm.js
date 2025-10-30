@@ -1,48 +1,66 @@
 const express = require('express');
 const router = express.Router();
-const multer = require('multer');
 const pool = require('../db');
+const { encryptServer, decryptServer } = require('./encryptionUtils');
 
-
-
-// Configure multer for multiple file uploads
-const storage = multer.memoryStorage();
-const upload = multer({ 
-  storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit per file
-    files: 10, // Maximum 10 files
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'));
-    }
-  }
-});
+// Add JSON body parser middleware with 50MB limit
+router.use(express.json({ limit: '50mb' }));
 
 // POST endpoint for security incidents
-router.post('/add-info', upload.array('images', 10), async (req, res) => {
+router.post('/add-info', async (req, res) => {
   const client = await pool.connect();
  
   try {
     await client.query('BEGIN');
    
+    // Decrypt the envelope
+    const { envelope } = req.body;
+    
+    if (!envelope) {
+      const errorResponse = JSON.stringify({
+        error: 'Missing encrypted envelope',
+        required: ['envelope']
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+
+    // Decrypt and parse the payload
+    let decryptedData;
+    try {
+      const decryptedString = decryptServer(envelope);
+      decryptedData = JSON.parse(decryptedString);
+    } catch (decryptError) {
+      console.error('Decryption error:', decryptError);
+      const errorResponse = JSON.stringify({
+        error: 'Failed to decrypt request data',
+        message: decryptError.message
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+
     const {
       // Domain landing form data
       firstName, lastName, gender, email, contact, employeeId, employeeType, employeeStatus,
       // Security form data  
-      eventName, eventDate, name, mobileNumber, staffId, verification, incidentReport, signature
-    } = req.body;
+      eventName, eventDate, name, mobileNumber, staffId, verification, incidentReport,
+      // Base64 encoded data
+      signature, images
+    } = decryptedData;
    
-    // Validate required fields (updated field names)
+    // Validate required fields
     if (!contact || !eventName || !eventDate || !name || !mobileNumber || !staffId ||
         !verification || !incidentReport || !signature) {
-      return res.status(400).json({
+      const errorResponse = JSON.stringify({
         error: 'Required fields missing',
         required: ['contact', 'eventName', 'eventDate', 'name', 'mobileNumber', 'staffId',
                   'verification', 'incidentReport', 'signature']
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
       });
     }
  
@@ -51,39 +69,62 @@ router.post('/add-info', upload.array('images', 10), async (req, res) => {
     const dateMatch = eventDate.match(dateRegex);
    
     if (!dateMatch) {
-      return res.status(400).json({ error: 'eventDate must be in dd/mm/yyyy format' });
+      const errorResponse = JSON.stringify({
+        error: 'eventDate must be in dd/mm/yyyy format'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
     }
  
     const [, day, month, year] = dateMatch;
-    const parsedDate = new Date(year, month - 1, day); // month is 0-indexed in Date constructor
+    const parsedDate = new Date(year, month - 1, day);
    
     // Validate if the date is valid
     if (parsedDate.getDate() != day || parsedDate.getMonth() != month - 1 || parsedDate.getFullYear() != year) {
-      return res.status(400).json({ error: 'Invalid date provided' });
+      const errorResponse = JSON.stringify({
+        error: 'Invalid date provided'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
     }
  
-    // Optional: enforce server-side 7-day range guard
+    // Enforce server-side 7-day range guard
     const today = new Date();
     const max = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const min = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
    
     if (parsedDate < min || parsedDate > max) {
-      return res.status(400).json({ error: 'eventDate must be within the past 7 days including today' });
+      const errorResponse = JSON.stringify({
+        error: 'eventDate must be within the past 7 days including today'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
     }
  
     // Validate images
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ error: 'At least one incident image is required' });
+    if (!images || !Array.isArray(images) || images.length === 0) {
+      const errorResponse = JSON.stringify({
+        error: 'At least one incident image is required'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
     }
  
     // Convert base64 signature to buffer
     const signatureBase64 = signature.replace(/^data:image\/[a-z]+;base64,/, '');
     const signatureBuffer = Buffer.from(signatureBase64, 'base64');
  
-    // Convert uploaded images to buffer array
-    const imageBuffers = req.files.map(file => file.buffer);
+    // Convert base64 images to buffer array
+    const imageBuffers = images.map(imageBase64 => {
+      const base64Data = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+      return Buffer.from(base64Data, 'base64');
+    });
  
-    // Insert ALL data into database (updated field names and added event_date)
+    // Insert ALL data into database
     const insertQuery = `
       INSERT INTO security_incidents
       (first_name, last_name, gender, email, contact, employee_id, employee_type, employee_status,
@@ -94,39 +135,50 @@ router.post('/add-info', upload.array('images', 10), async (req, res) => {
     `;
  
     const result = await client.query(insertQuery, [
-      firstName || null,        // Domain data
-      lastName || null,         // Domain data
-      gender || null,           // Domain data
-      email || null,            // Domain data
-      contact,                  // Domain data
-      employeeId || null,       // Domain data
-      employeeType || null,     // Domain data
-      employeeStatus || null,   // Domain data
-      eventName,                // Changed from employeeName to eventName
-      eventDate,                // New field: store as dd/mm/yyyy string
-      name,                     // Security form data
-      mobileNumber,             // Security form data
-      staffId,                  // Security form data
-      verification,             // Security form data
-      incidentReport,           // Security form data
-      imageBuffers,             // Multiple images array
-      signatureBuffer           // Signature buffer
+      firstName || null,
+      lastName || null,
+      gender || null,
+      email || null,
+      contact,
+      employeeId || null,
+      employeeType || null,
+      employeeStatus || null,
+      eventName,
+      eventDate,
+      name,
+      mobileNumber,
+      staffId,
+      verification,
+      incidentReport,
+      imageBuffers,
+      signatureBuffer
     ]);
  
     await client.query('COMMIT');
- 
-    res.status(201).json({
+
+    // Encrypt success response
+    const successResponse = JSON.stringify({
       message: 'Security incident report submitted successfully!',
       incidentId: result.rows[0].id,
       timestamp: result.rows[0].created_at
     });
  
+    res.status(201).json({
+      envelope: encryptServer(successResponse)
+    });
+ 
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error saving security incident:', error);
-    res.status(500).json({
+    
+    // Encrypt error response
+    const errorResponse = JSON.stringify({
       error: 'Internal server error',
       message: error.message
+    });
+    
+    res.status(500).json({
+      envelope: encryptServer(errorResponse)
     });
   } finally {
     client.release();
