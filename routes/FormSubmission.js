@@ -1,29 +1,11 @@
 // FormSubmission.js
 const express = require('express');
-const multer = require('multer');
-const pool = require('../db'); // PG Pool
+const pool = require('../db');
+const { encryptServer, decryptServer } = require('./encryptionUtils');
 const router = express.Router();
 
-/* ------------ Multer (memory) with limits & type filter ------------ */
-
-const storage = multer.memoryStorage();
-
-const fileFilter = (req, file, cb) => {
-  // Allow JPEG/PNG (add 'image/webp' if you choose to support it)
-  const allowed = ['image/jpeg', 'image/png'];
-  if (allowed.includes(file.mimetype)) return cb(null, true);
-  return cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', `Unsupported mimetype: ${file.mimetype}`));
-};
-
-const upload = multer({
-  storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5 MB per file
-    files: 2,                  // selfie + signature
-    fields: 50,
-  },
-  fileFilter,
-});
+// Add JSON body parser middleware with 50MB limit
+router.use(express.json({ limit: '50mb' }));
 
 /* -------------------- Helpers -------------------- */
 
@@ -48,178 +30,173 @@ function deriveNameParts(body) {
 
 /* --------------------- Route --------------------- */
 
-// Accept TWO file fields: selfie and signature
-router.post(
-  '/add-info',
-  upload.fields([
-    { name: 'selfie', maxCount: 1 },
-    { name: 'signature', maxCount: 1 },
-  ]),
-  async (req, res) => {
-    try {
-      // Text fields (from multipart)
-      const {
-        // Preferred individual fields
-        firstName: bodyFirstName,
-        lastName: bodyLastName,
-        name, // optional combined name; used as fallback
-        email,
-        contact,
-        gender,
-        employeeStatus,
-        employeeType,
-        employeeId,
-        eventName,
-        eventDate,
-        visitorType,
-        idNumber,
-        feedback,
-        signature: signatureBase64, // fallback if signature sent as base64
-        formType,
-      } = req.body;
-
-      // Derive first/last name if needed
-      const { firstName, lastName } = deriveNameParts({
-        firstName: bodyFirstName,
-        lastName: bodyLastName,
-        name,
+router.post('/add-info', async (req, res) => {
+  try {
+    // Decrypt the envelope
+    const { envelope } = req.body;
+    
+    if (!envelope) {
+      const errorResponse = JSON.stringify({
+        error: 'Missing encrypted envelope',
+        required: ['envelope']
       });
-
-      // Files parsed by multer
-      const selfieFile    = req.files?.selfie?.[0] || null;
-      const signatureFile = req.files?.signature?.[0] || null;
-
-      // Buffers to persist (BYTEA in Postgres)
-      const selfieBuffer = selfieFile ? selfieFile.buffer : null;
-
-      // Signature: prefer uploaded file; else allow base64 fallback
-      let signatureBuffer = null;
-      if (signatureFile) {
-        signatureBuffer = signatureFile.buffer;
-      } else if (signatureBase64) {
-        const base64Data = String(signatureBase64).replace(/^data:image\/\w+;base64,/, '');
-        signatureBuffer = Buffer.from(base64Data, 'base64');
-      }
-
-      /* -------------- Validation -------------- */
-      if (!firstName) {
-        return res.status(400).json({ error: 'firstName is required.' });
-      }
-      if (!eventName || !visitorType) {
-        return res.status(400).json({ error: 'eventName and visitorType are required.' });
-      }
-       if (!eventDate) {
-        return res.status(400).json({ error: 'eventDate is required.' });
-      }
-      if (!selfieBuffer) {
-        return res.status(400).json({ error: 'selfie image is required.' });
-      }
-      if (!signatureBuffer) {
-        return res.status(400).json({ error: 'signature image is required.' });
-      }
-
-      /* -------------- Insert -------------- */
-      const result = await pool.query(
-        `INSERT INTO form_submissions (
-          first_name, last_name, email, contact, gender,
-          employee_status, employee_type, employee_id,
-          event_name, event_date, visitor_type, id_number, feedback,
-          selfie, signature, form_type
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-        RETURNING *;`,
-        [
-          firstName || null,
-          lastName || null,
-          email || null,
-          contact || null,
-          gender || null,
-          employeeStatus || null,
-          employeeType || null,
-          employeeId || null,
-          eventName || null,
-          eventDate || null,
-          visitorType || null,
-          idNumber || null,
-          feedback || null,
-          selfieBuffer,
-          signatureBuffer,
-          formType || null,
-        ]
-      );
-
-      return res.status(201).json({
-        message: 'Form data submitted successfully!',
-        data: result.rows[0],
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
       });
-    } catch (error) {
-      // Multer-specific errors (size/type/unexpected field)
-      if (error instanceof multer.MulterError) {
-        console.error('MulterError:', error);
-        const status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
-        return res.status(status).json({ error: `Upload error: ${error.code}` });
-      }
-      console.error('Error submitting form data:', error);
-      return res.status(500).json({ error: 'Failed to submit form data.' });
     }
+
+    // Decrypt and parse the payload
+    let decryptedData;
+    try {
+      const decryptedString = decryptServer(envelope);
+      decryptedData = JSON.parse(decryptedString);
+    } catch (decryptError) {
+      console.error('Decryption error:', decryptError);
+      const errorResponse = JSON.stringify({
+        error: 'Failed to decrypt request data',
+        message: decryptError.message
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+
+    // Text fields from decrypted data
+    const {
+      // Preferred individual fields
+      firstName: bodyFirstName,
+      lastName: bodyLastName,
+      name, // optional combined name; used as fallback
+      email,
+      contact,
+      gender,
+      employeeStatus,
+      employeeType,
+      employeeId,
+      eventName,
+      eventDate,
+      visitorType,
+      idNumber,
+      feedback,
+      formType,
+      // Base64 encoded images
+      selfie: selfieBase64,
+      signature: signatureBase64,
+    } = decryptedData;
+
+    // Derive first/last name if needed
+    const { firstName, lastName } = deriveNameParts({
+      firstName: bodyFirstName,
+      lastName: bodyLastName,
+      name,
+    });
+
+    // Convert Base64 to Buffers
+    let selfieBuffer = null;
+    if (selfieBase64) {
+      const base64Data = String(selfieBase64).replace(/^data:image\/\w+;base64,/, '');
+      selfieBuffer = Buffer.from(base64Data, 'base64');
+    }
+
+    let signatureBuffer = null;
+    if (signatureBase64) {
+      const base64Data = String(signatureBase64).replace(/^data:image\/\w+;base64,/, '');
+      signatureBuffer = Buffer.from(base64Data, 'base64');
+    }
+
+    /* -------------- Validation -------------- */
+    if (!firstName) {
+      const errorResponse = JSON.stringify({
+        error: 'firstName is required.'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+    if (!eventName || !visitorType) {
+      const errorResponse = JSON.stringify({
+        error: 'eventName and visitorType are required.'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+    if (!eventDate) {
+      const errorResponse = JSON.stringify({
+        error: 'eventDate is required.'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+    if (!selfieBuffer) {
+      const errorResponse = JSON.stringify({
+        error: 'selfie image is required.'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+    if (!signatureBuffer) {
+      const errorResponse = JSON.stringify({
+        error: 'signature image is required.'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+
+    /* -------------- Insert -------------- */
+    const result = await pool.query(
+      `INSERT INTO form_submissions (
+        first_name, last_name, email, contact, gender,
+        employee_status, employee_type, employee_id,
+        event_name, event_date, visitor_type, id_number, feedback,
+        selfie, signature, form_type
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+      RETURNING *;`,
+      [
+        firstName || null,
+        lastName || null,
+        email || null,
+        contact || null,
+        gender || null,
+        employeeStatus || null,
+        employeeType || null,
+        employeeId || null,
+        eventName || null,
+        eventDate || null,
+        visitorType || null,
+        idNumber || null,
+        feedback || null,
+        selfieBuffer,
+        signatureBuffer,
+        formType || null,
+      ]
+    );
+
+    // Encrypt success response
+    const successResponse = JSON.stringify({
+      message: 'Form data submitted successfully!',
+      data: result.rows[0]
+    });
+
+    return res.status(201).json({
+      envelope: encryptServer(successResponse)
+    });
+  } catch (error) {
+    console.error('Error submitting form data:', error);
+    
+    // Encrypt error response
+    const errorResponse = JSON.stringify({
+      error: 'Failed to submit form data.',
+      message: error.message
+    });
+    
+    return res.status(500).json({
+      envelope: encryptServer(errorResponse)
+    });
   }
-);
+});
 
 module.exports = router;
-
-// // FormSubmission.js
-// const express = require('express');
-// const multer = require('multer');
-// const pool = require('../db'); // Import the database connection pool
-// const router = express.Router();
-
-// // Multer setup for file uploads. Use memory storage to get a buffer.
-// const upload = multer({ storage: multer.memoryStorage() });
-
-// // POST endpoint to handle form data and file uploads
-// router.post('/add-info', upload.single('selfie'), async (req, res) => {
-//   try {
-//     const {
-//       firstName, lastName, email, contact, gender,
-//       employeeStatus, employeeType, employeeId,
-//       eventName, visitorType, idNumber, feedback, signature, formType
-//     } = req.body;
-
-//     // Convert selfie file to a buffer (it's already in req.file.buffer with memory storage)
-//     const selfieBuffer = req.file ? req.file.buffer : null;
-
-//     // Convert signature Base64 string to a buffer
-//     let signatureBuffer = null;
-//     if (signature) {
-//       const base64Data = signature.replace(/^data:image\/\w+;base64,/, '');
-//       signatureBuffer = Buffer.from(base64Data, 'base64');
-//     }
-
-//     // Insert data into the database
-//     const result = await pool.query(
-//       `INSERT INTO form_submissions (
-//         first_name, last_name, email, contact, gender,
-//         employee_status, employee_type, employee_id,
-//         event_name, visitor_type, id_number, feedback,
-//         selfie, signature, form_Type
-//       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-//       RETURNING *;`,
-//       [
-//         firstName, lastName, email, contact, gender,
-//         employeeStatus, employeeType, employeeId,
-//         eventName, visitorType, idNumber, feedback,
-//         selfieBuffer, signatureBuffer, formType
-//       ]
-//     );
-
-//     res.status(201).json({
-//       message: 'Form data submitted successfully!',
-//       data: result.rows[0]
-//     });
-
-//   } catch (error) {
-//     console.error('Error submitting form data:', error);
-//     res.status(500).json({ error: 'Failed to submit form data.' });
-//   }
-// });
-
-// module.exports = router;
