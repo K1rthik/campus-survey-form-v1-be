@@ -46,18 +46,30 @@ router.post('/add-info', async (req, res) => {
       // Domain landing form data
       firstName, lastName, gender, email, contact, employeeId, employeeType, employeeStatus,
       // Security form data  
-      eventName, eventDate, name, mobileNumber, staffId, verification, incidentReport,
+      selectionType, eventName, eventDate, name, mobileNumber, staffId, verification, incidentReport,
       // Base64 encoded data
       signature, images
     } = decryptedData;
    
     // Validate required fields
-    if (!contact || !eventName || !eventDate || !name || !mobileNumber || !staffId ||
+    if (!contact || !selectionType || !eventName || !eventDate || !name || !mobileNumber || !staffId ||
         !verification || !incidentReport || !signature) {
       const errorResponse = JSON.stringify({
         error: 'Required fields missing',
-        required: ['contact', 'eventName', 'eventDate', 'name', 'mobileNumber', 'staffId',
+        required: ['contact', 'selectionType', 'eventName', 'eventDate', 'name', 'mobileNumber', 'staffId',
                   'verification', 'incidentReport', 'signature']
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+
+    // Validate selectionType
+    const validSelectionTypes = ['event', 'students', 'employees', 'campus', 'others'];
+    if (!validSelectionTypes.includes(selectionType)) {
+      const errorResponse = JSON.stringify({
+        error: 'Invalid selection type',
+        validTypes: validSelectionTypes
       });
       return res.status(400).json({ 
         envelope: encryptServer(errorResponse) 
@@ -124,13 +136,13 @@ router.post('/add-info', async (req, res) => {
       return Buffer.from(base64Data, 'base64');
     });
  
-    // Insert ALL data into database
+    // Insert ALL data into database including selectionType
     const insertQuery = `
       INSERT INTO security_incidents
       (first_name, last_name, gender, email, contact, employee_id, employee_type, employee_status,
-       event_name, event_date, name, mobile_number, staff_id, verification, incident_report,
+       selection_type, event_name, event_date, name, mobile_number, staff_id, verification, incident_report,
        incident_images, signature)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       RETURNING id, created_at
     `;
  
@@ -143,6 +155,7 @@ router.post('/add-info', async (req, res) => {
       employeeId || null,
       employeeType || null,
       employeeStatus || null,
+      selectionType,
       eventName,
       eventDate,
       name,
