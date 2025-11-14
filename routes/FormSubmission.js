@@ -73,6 +73,7 @@ router.post('/add-info', async (req, res) => {
       employeeStatus,
       employeeType,
       employeeId,
+      selectionType, // NEW: Add selectionType extraction
       eventName,
       eventDate,
       visitorType,
@@ -113,6 +114,29 @@ router.post('/add-info', async (req, res) => {
         envelope: encryptServer(errorResponse) 
       });
     }
+    
+    // NEW: Validate selectionType
+    if (!selectionType) {
+      const errorResponse = JSON.stringify({
+        error: 'selectionType is required.'
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+
+    // NEW: Validate selectionType values based on form type
+    const validSelectionTypes = ['event', 'others', 'regular', 'other'];
+    if (!validSelectionTypes.includes(selectionType)) {
+      const errorResponse = JSON.stringify({
+        error: 'Invalid selection type',
+        validTypes: validSelectionTypes
+      });
+      return res.status(400).json({ 
+        envelope: encryptServer(errorResponse) 
+      });
+    }
+
     if (!eventName || !visitorType) {
       const errorResponse = JSON.stringify({
         error: 'eventName and visitorType are required.'
@@ -146,14 +170,14 @@ router.post('/add-info', async (req, res) => {
       });
     }
 
-    /* -------------- Insert -------------- */
+    /* -------------- Insert with selectionType -------------- */
     const result = await pool.query(
       `INSERT INTO form_submissions (
         first_name, last_name, email, contact, gender,
         employee_status, employee_type, employee_id,
-        event_name, event_date, visitor_type, id_number, feedback,
+        selection_type, event_name, event_date, visitor_type, id_number, feedback,
         selfie, signature, form_type
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
       RETURNING *;`,
       [
         firstName || null,
@@ -164,6 +188,7 @@ router.post('/add-info', async (req, res) => {
         employeeStatus || null,
         employeeType || null,
         employeeId || null,
+        selectionType || null,  // NEW: Add selectionType parameter
         eventName || null,
         eventDate || null,
         visitorType || null,
