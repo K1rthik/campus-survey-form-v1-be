@@ -126,7 +126,12 @@ router.post('/add-info', async (req, res) => {
     }
 
     // NEW: Validate selectionType values based on form type
-    const validSelectionTypes = ['event', 'others', 'regular', 'other'];
+    const validSelectionTypes = ['overall-experience', 'event-organization', 'entry-process', 
+      'venue-infrastructure', 'seating-arrangements', 'food-refreshments',
+      'hospitality-staff', 'audio-visual', 'cleanliness-hygiene', 
+      'security-safety', 'others-suggestions','food-quality', 'menu-variety', 'hygiene-cleanliness', 
+      'service-staff', 'waiting-time', 'kafe-app', 
+      'item-availability', 'seating-ambience',];
     if (!validSelectionTypes.includes(selectionType)) {
       const errorResponse = JSON.stringify({
         error: 'Invalid selection type',
@@ -161,14 +166,14 @@ router.post('/add-info', async (req, res) => {
         envelope: encryptServer(errorResponse) 
       });
     }
-    if (!signatureBuffer) {
-      const errorResponse = JSON.stringify({
-        error: 'signature image is required.'
-      });
-      return res.status(400).json({ 
-        envelope: encryptServer(errorResponse) 
-      });
-    }
+    // if (!signatureBuffer) {
+    //   const errorResponse = JSON.stringify({
+    //     error: 'signature image is required.'
+    //   });
+    //   return res.status(400).json({ 
+    //     envelope: encryptServer(errorResponse) 
+    //   });
+    // }
 
     /* -------------- Insert with selectionType -------------- */
     const result = await pool.query(
