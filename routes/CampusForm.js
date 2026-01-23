@@ -1,3 +1,4 @@
+
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
@@ -48,14 +49,14 @@ router.post('/add-info', async (req, res) => {
       // Campus form data
       selectionType, eventName, name, mobileNumber, userType, staffId, feedback, visitDate,
       // Base64 encoded data
-      signature, selfieImage
+      selfieImage
     } = decryptedData;
  
     // Validate required fields
-    if (!contact || !selectionType || !eventName || !name || !mobileNumber || !userType || !feedback || !signature || !visitDate) {
+    if (!contact || !selectionType || !eventName || !name || !mobileNumber || !userType || !feedback || !visitDate) {
       const errorResponse = JSON.stringify({
         error: 'Required fields missing',
-        required: ['contact', 'selectionType', 'eventName', 'name', 'mobileNumber', 'userType', 'feedback', 'signature', 'visitDate']
+        required: ['contact', 'selectionType', 'eventName', 'name', 'mobileNumber', 'userType', 'feedback','visitDate']
       });
       return res.status(400).json({ 
         envelope: encryptServer(errorResponse) 
@@ -63,7 +64,9 @@ router.post('/add-info', async (req, res) => {
     }
 
     // Validate selectionType
-    const validSelectionTypes = ['event', 'others', 'feedback', 'new idea', 'escalation'];
+    const validSelectionTypes = [ 'infrastructure', 'cleanliness', 'maintenance', 'security', 
+      'cafeteria', 'hostel', 'it-wifi', 'transport-parking', 
+      'amenities', 'administration-helpdesk', 'safety','others-suggestions',];
     if (!validSelectionTypes.includes(selectionType)) {
       const errorResponse = JSON.stringify({
         error: 'Invalid selection type',
@@ -134,20 +137,16 @@ router.post('/add-info', async (req, res) => {
       });
     }
  
-    // Convert base64 signature to buffer
-    const signatureBase64 = signature.replace(/^data:image\/[a-z]+;base64,/, '');
-    const signatureBuffer = Buffer.from(signatureBase64, 'base64');
-
     // Convert base64 selfie image to buffer
     const selfieBase64 = selfieImage.replace(/^data:image\/[a-z]+;base64,/, '');
     const selfieBuffer = Buffer.from(selfieBase64, 'base64');
  
-    // Insert ALL data into database including selectionType
+    // Insert ALL data into database including selectionType (without signature)
     const insertQuery = `
       INSERT INTO campus_feedback
       (first_name, last_name, gender, email, contact, employee_id, employee_type, employee_status,
-       selection_type, event_name, name, mobile_number, user_type, staff_id, selfie_image, feedback, signature, visit_date)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+       selection_type, event_name, name, mobile_number, user_type, staff_id, selfie_image, feedback, visit_date)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING id, created_at
     `;
  
@@ -168,7 +167,6 @@ router.post('/add-info', async (req, res) => {
       userType === 'Staff' ? staffId : null,
       selfieBuffer,
       feedback,
-      signatureBuffer,
       visitDate
     ]);
  
