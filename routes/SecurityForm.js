@@ -1,3 +1,4 @@
+
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
@@ -48,16 +49,16 @@ router.post('/add-info', async (req, res) => {
       // Security form data  
       selectionType, eventName, eventDate, name, mobileNumber, staffId, verification, incidentReport,
       // Base64 encoded data
-      signature, images
+      images
     } = decryptedData;
    
     // Validate required fields
     if (!contact || !selectionType || !eventName || !eventDate || !name || !mobileNumber || !staffId ||
-        !verification || !incidentReport || !signature) {
+        !verification || !incidentReport) {
       const errorResponse = JSON.stringify({
         error: 'Required fields missing',
         required: ['contact', 'selectionType', 'eventName', 'eventDate', 'name', 'mobileNumber', 'staffId',
-                  'verification', 'incidentReport', 'signature']
+                  'verification', 'incidentReport']
       });
       return res.status(400).json({ 
         envelope: encryptServer(errorResponse) 
@@ -65,7 +66,7 @@ router.post('/add-info', async (req, res) => {
     }
 
     // Validate selectionType
-    const validSelectionTypes = ['event', 'students', 'employees', 'campus', 'others'];
+    const validSelectionTypes = ['event', 'students', 'employees', 'campus', 'others-suggestions'];
     if (!validSelectionTypes.includes(selectionType)) {
       const errorResponse = JSON.stringify({
         error: 'Invalid selection type',
@@ -126,23 +127,19 @@ router.post('/add-info', async (req, res) => {
       });
     }
  
-    // Convert base64 signature to buffer
-    const signatureBase64 = signature.replace(/^data:image\/[a-z]+;base64,/, '');
-    const signatureBuffer = Buffer.from(signatureBase64, 'base64');
- 
     // Convert base64 images to buffer array
     const imageBuffers = images.map(imageBase64 => {
       const base64Data = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
       return Buffer.from(base64Data, 'base64');
     });
  
-    // Insert ALL data into database including selectionType
+    // Insert ALL data into database including selectionType (without signature)
     const insertQuery = `
       INSERT INTO security_incidents
       (first_name, last_name, gender, email, contact, employee_id, employee_type, employee_status,
        selection_type, event_name, event_date, name, mobile_number, staff_id, verification, incident_report,
-       incident_images, signature)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+       incident_images)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING id, created_at
     `;
  
@@ -163,8 +160,7 @@ router.post('/add-info', async (req, res) => {
       staffId,
       verification,
       incidentReport,
-      imageBuffers,
-      signatureBuffer
+      imageBuffers
     ]);
  
     await client.query('COMMIT');
