@@ -1,22 +1,20 @@
-// db.js
-const { Pool } = require('pg');
-require('dotenv').config();
+const { Pool } = require("pg");
 
 const pool = new Pool({
-    user: 'postgres',
-    host: '172.30.6.12',
-    database: 'Campus-Survey-Form',
-    password: 'P@ssw0rd',
-    port: 5000,
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
 
 // Test the database connection
-pool.connect((err, client, release) => {
-  if (err) {
-    return console.error('Error acquiring client', err.stack);
-  }
-  console.log('Connected to PostgreSQL database!');
-  release();
-});
+pool.connect()
+  .then(client => {
+    console.log("Connected to PostgreSQL database 🚀");
+    client.release();
+  })
+  .catch(err => {
+    console.error("Error connecting to PostgreSQL", err);
+  });
 
 module.exports = pool;
